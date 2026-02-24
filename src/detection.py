@@ -21,7 +21,7 @@ agent1 = Agent1(model, tokenizer)
 output_file = "../data/smishing_output.ndjson"
 batch_size = 1
 for i in tqdm(range(0, len(dataset), batch_size), total=(len(dataset) + batch_size - 1) // batch_size):
-    batch = dataset[i:i+batch_size]
+    batch = dataset.select(range(i, i+batch_size))
     entries = agent1.parse_input(batch)
 
     with open(output_file, "a", encoding="utf-8") as f:

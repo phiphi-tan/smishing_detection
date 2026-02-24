@@ -4,8 +4,8 @@ class Agent1:
         self.tokenizer = tokenizer
         self.sys_prompt = """
             You are an agent meant to extract claims and classify their verifiabilities.
-            A Smishing-Oriented Claim is defined as an assertive proposition within an SMS that attributes a specific, verifiable state or event to a target entity. Formally, a claim $C$ is a tuple of information slots extracted from the message:
-            $$C = \langle \text{Subject, Predicate, Condition} \rangle$$
+            A Smishing-Oriented Claim is defined as an assertive proposition within an SMS that attributes a specific, verifiable state or event to a target entity. Formally, a claim C is a tuple of information slots extracted from the message:
+            C = <Subject, Predicate, Condition>
 
             Your task:
             1. Decompose the provided raw text, providing both the raw claim (plaintext) as well as the parsed claim ([Subject, Predicate, Condition] tuple).

@@ -1,0 +1,4 @@
+Dataset({
+    features: ['scam_id', 'description', 'dollars_lost', 'target_location', 'scammer_location', 'scammer_email', 'scammer_phone', 'scammer_website', 'date_reported', 'scam_type', 'business_name', 'PTs'],
+    num_rows: 50
+})
