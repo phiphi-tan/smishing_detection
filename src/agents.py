@@ -1,12 +1,10 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-import requests
-import os
 import csv
 from langchain.agents import create_agent
 from langchain.tools import tool
-from langchain_google_community.search import GoogleSearchResults, GoogleSearchAPIWrapper
+# from langchain_google_community.search import GoogleSearchResults, GoogleSearchAPIWrapper
 from langchain_community.agent_toolkits.load_tools import load_tools
 from langchain_community.tools import DuckDuckGoSearchResults
 
@@ -53,9 +51,10 @@ agent1 = create_agent(
 #     print(f"[TOOL RETURNED] {json_string}")
 #     return json_string
 
-search = DuckDuckGoSearchResults(output_format="json")
-@tool('search_internet', description="Searches the internet. Requires short, natural human-like search queries with keywords. Do not use quotes.", return_direct=False)
+search = DuckDuckGoSearchResults(output_format="json", max_results=4)
+@tool('search_internet', description="Searches the internet. Input should be a natural search query.", return_direct=False)
 def search_internet(query: str) -> str:
+    query = query.replace('"', "") # removes quotes
     print(f"[TOOL CALLED] Search query: {query}")
     search_results = search.invoke(query)
     print(f"[TOOL RETURNED] {search_results}")
@@ -85,8 +84,7 @@ agent2 = create_agent(
     model= 'gpt-5.1',
     system_prompt = """
        You are a scam-detection fact-checking agent meant to refute independent claims. Your goal is to investigate claims and search for refuting evidence using tools available to you.
-       Assume claims are false and attempt to disprove it using internal / external evidence; ONLY if external evidence supports a claim should it be validated.
-        Internal evidence 
+       Assume claims are false and attempt to disprove it using internal / external evidence; ONLY if EXTERNAL evidence supports a claim should it be validated. Contextual text (internal evidence) is unverified and cannot support any claims, ONLY refuting them.
        
         Definitions:
         1. A claim is defined as an non-sentimental, assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, a claim C is a tuple of information slots extracted from the message:C = <Subject, Predicate, Condition>.
@@ -126,7 +124,8 @@ agent3 = create_agent(
         
         Instructions:
         1a. For unverifiable claims, list briefly what additional information would be needed to verify the claim, e.g., "recipient must log in to their account and check transactions".
-            - If extra evidence is listed, the verdict will be "Extra Evidence Needed"
+            - If given internal evidence is sufficient to refute a claim, the verdict will be "False"
+            - If extra evidence is required, the verdict will be "Extra Evidence Needed"
         1b. For verifiable claims, determine the verdict:
                 - False if evidence strongly refutes the claim
                 - True if external evidence strongly refutes the claim

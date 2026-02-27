@@ -1,5 +1,4 @@
 import json
-import ndjson
 from langchain_community.document_loaders.csv_loader import CSVLoader
 from agents import agent1, agent2, agent3
 
@@ -16,7 +15,7 @@ data = loader.load() # into a langchain document
 i = 0
 
 for row in data:
-    if i <= 0:
+    if i < 27:
         i += 1
         continue
     phishing = row.metadata.get('raw_text')
