@@ -1,3 +1,3 @@
 # smishing_detection
 
-Install requirements
+initialise uv and ensure langchain[openai] is installed
