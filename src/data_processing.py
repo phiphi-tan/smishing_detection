@@ -1,7 +1,9 @@
 import json
 from collections import defaultdict
+import pandas as pd
 
 filename = "../data/smishing_output.ndjson"
+csv_file = "../data/D2.csv"
 
 claim_stats = defaultdict(lambda: defaultdict(int))
 total_claims = 0  
@@ -11,6 +13,7 @@ messages_with_false = 0
 messages_with_extra_evidence = 0
 messages_with_true = 0
 other_messages = 0
+
 
 for line in open(filename, "r", encoding="utf-8"):
     line = line.strip()
@@ -55,3 +58,48 @@ for category, verdict_counts in claim_stats.items():
     print(f"\nCategory: {category.capitalize()} (Total claims: {category_total})")
     for verdict, count in verdict_counts.items():
         print(f"  {verdict.capitalize()}: {count}")
+
+print("\n=== Verdict Percentages Per Type ===")
+
+df = pd.read_csv(csv_file)
+
+type_stats = defaultdict(lambda: defaultdict(int))
+category_type_stats = defaultdict(lambda: defaultdict(int))
+
+with open(filename, "r", encoding="utf-8") as f:
+    for idx, line in enumerate(f):
+        line = line.strip()
+        if not line:
+            continue
+        
+        msg_type = df.loc[idx, "message_type"]
+        claims = json.loads(line)
+        
+        for claim in claims:
+            verdict = claim.get("Verdict", "Unknown").strip().lower()
+            type_stats[msg_type][verdict] += 1
+            category = claim.get("Category", "Unknown").strip().lower()
+            category_type_stats[msg_type][category] += 1
+
+# Print percentages
+for msg_type, verdict_counts in type_stats.items():
+    total = sum(verdict_counts.values())
+    
+    print(f"\nType: {msg_type} (Total claims: {total})")
+    for verdict in ["false", "extra evidence needed", "true", "unsure"]:
+        count = verdict_counts.get(verdict, 0)
+        percentage = (count / total * 100) if total > 0 else 0
+        print(f"  {verdict}: {percentage:.2f}%")
+
+
+print("\n=== Category Distribution Per Type ===")
+
+# Print percentages per type
+for msg_type, category_counts in category_type_stats.items():
+    total = sum(category_counts.values())
+    
+    print(f"\nType: {msg_type} (Total claims: {total})")
+    for category in ["verifiable", "unverifiable"]:
+        count = category_counts.get(category, 0)
+        percentage = (count / total * 100) if total > 0 else 0
+        print(f"  {category}: {percentage:.2f}%")

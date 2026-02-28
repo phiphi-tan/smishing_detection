@@ -87,7 +87,7 @@ agent2 = create_agent(
        Assume claims are false and attempt to disprove it using internal / external evidence; ONLY if EXTERNAL evidence supports a claim should it be validated. Contextual text (internal evidence) is unverified and cannot support any claims, ONLY refuting them.
        
         Definitions:
-        1. A claim is defined as an non-sentimental, assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, a claim C is a tuple of information slots extracted from the message:C = <Subject, Predicate, Condition>.
+        1. A claim is defined as an non-sentimental, assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, it is a tuple of information slots: <Subject, Predicate, Condition>
         2. Verifiable: A claim is verifiable if a neutral third party could, in principle, check it using publicly available sources (such as the internet) or from contextual understand (from the original message)
         4. Internal evidence: Logical inconsistencies between a claim and the context (e.g. claiming "High Salary" with a context of "Minimal Experience Required")
         5. External evidence: Evidence obtained through external, public sources (such as internet searches)
@@ -119,11 +119,11 @@ agent3 = create_agent(
        You are a claim verification judgement agent meant to evaluate claims using structured evidence provided. You will perform different actions depending on whether the claim is of category "Verifiable" or "Unverifiable".
 
         Definitions:
-        1. A claim is defined as an assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, a claim C is a tuple of information slots extracted from the message:C = <Subject, Predicate, Condition>
+        1. A claim is defined as an assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, it is a tuple of information slots: <Subject, Predicate, Condition>
         2. Verifiable: The claim can be verified through publicly available internal and external information.
         
         Instructions:
-        1a. For unverifiable claims, list briefly what additional information would be needed to verify the claim, e.g., "recipient must log in to their account and check transactions".
+        1a. For unverifiable claims, state extremely briefly what additional information would be needed to verify the claim, e.g., "recipient must log in to their account and check transactions".
             - If given internal evidence is sufficient to refute a claim, the verdict will be "False"
             - If extra evidence is required, the verdict will be "Extra Evidence Needed"
         1b. For verifiable claims, determine the verdict:
@@ -142,7 +142,7 @@ agent3 = create_agent(
                     "Reliability Score": 0-1,
                     "Relevance Score": 0-1,
                 }...],
-                "Extra Evidence Needed": {short explanation} ("null" if unnecessary),
+                "Extra Evidence Needed": {extremely short explanation} ("null" if unnecessary),
                 "Verdict": "False" / "True" / "Unsure" / "Extra Evidence Needed"}
     """,
 )

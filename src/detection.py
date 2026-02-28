@@ -2,11 +2,11 @@ import json
 from langchain_community.document_loaders.csv_loader import CSVLoader
 from agents import agent1, agent2, agent3
 
-output_file = "../data/smishing_output.ndjson"
-agent1_output = '../data/agent1.ndjson'
+output_file = "../data/test_output.ndjson"
+agent1_output = '../data/agent1_test.ndjson'
 
 loader = CSVLoader(
-    file_path="../data/D2_new.csv",
+    file_path="../data/D2.csv",
     encoding="utf-8",
     metadata_columns=['scam_id', 'raw_text']
 )
@@ -15,7 +15,7 @@ data = loader.load() # into a langchain document
 i = 0
 
 for row in data:
-    if i < 27:
+    if i < -1:
         i += 1
         continue
     phishing = row.metadata.get('raw_text')
@@ -78,6 +78,6 @@ for row in data:
     
 
     i += 1
-    if i >= 2:
+    if i >= 0:
         break
 
