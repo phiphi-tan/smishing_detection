@@ -2,11 +2,11 @@ import json
 from langchain_community.document_loaders.csv_loader import CSVLoader
 from agents import agent1, agent2, agent3
 
-output_file = "../data/test_output.ndjson"
-agent1_output = '../data/agent1_test.ndjson'
+output_file = "./data/test_output.ndjson"
+agent1_output = './data/agent1_test.ndjson'
 
 loader = CSVLoader(
-    file_path="../data/D2.csv",
+    file_path="./data/D2.csv",
     encoding="utf-8",
     metadata_columns=['scam_id', 'raw_text']
 )
@@ -27,7 +27,11 @@ for row in data:
             {"role": "user", "content": phishing}
         ]
     })
+
+    # print(f"response 1: {response1}")
+
     agent1_response = response1['messages'][-1].content
+    print(f"agent 1: {agent1_response}")
 
     try:
         claims = json.loads(agent1_response)

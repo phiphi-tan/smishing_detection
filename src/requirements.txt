@@ -1,0 +1,11 @@
+langchain==1.2.12
+langchain_community==0.4.1
+langchain_openai==1.1.11
+pandas==3.0.1
+python-dotenv==1.2.2
+
+vllm
+langchain[openai]
+mcp
+ddgs
+langchain-mcp-adapters

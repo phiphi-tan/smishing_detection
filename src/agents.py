@@ -7,9 +7,20 @@ from langchain.tools import tool
 # from langchain_google_community.search import GoogleSearchResults, GoogleSearchAPIWrapper
 from langchain_community.agent_toolkits.load_tools import load_tools
 from langchain_community.tools import DuckDuckGoSearchResults
+from langchain_openai import ChatOpenAI
+from langchain_mcp_adapters.client import MultiServerMCPClient 
+
+VLLM = ChatOpenAI(
+    # model_name="Qwen/Qwen3-8B",
+    model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
+    # model_name="Qwen/Qwen3-14B-FP8",
+    # model_name="Qwen/Qwen3.5-9B",
+    base_url="http://127.0.0.1:8000/v1",
+    api_key="EMPTY",
+)
 
 agent1 = create_agent(
-    model= 'gpt-5.1',
+    model= VLLM,
     system_prompt = """
         You are an agent meant to extract non-sentimental claims from given texts and classify their verifiabilities.
 
@@ -62,7 +73,7 @@ def search_internet(query: str) -> str:
 
 # mimics a database
 context_data = {}
-with open("../data/D2.csv", encoding="utf-8", errors="replace") as f:
+with open("./data/D2.csv", encoding="utf-8", errors="replace") as f:
     reader = csv.DictReader(f)
     for row in reader:
         context_id = row["scam_id"]
@@ -78,12 +89,13 @@ def find_context(scam_id: str) -> str:
         raw_text = "No context found for this scam_id."
     print(f"[TOOL RETURNED] {raw_text}")
     return raw_text
- 
+
+tools_list = [search_internet, find_context]
 
 agent2 = create_agent(
-    model= 'gpt-5.1',
+    model= VLLM,
     system_prompt = """
-       You are a scam-detection fact-checking agent meant to refute independent claims. Your goal is to investigate claims and search for refuting evidence using tools available to you.
+       You are a scam-detection fact-checking agent meant to refute independent claims. Your goal is to investigate claims and search for refuting evidence using all tools available to you.
        Assume claims are false and attempt to disprove it using internal / external evidence; ONLY if EXTERNAL evidence supports a claim should it be validated. Contextual text (internal evidence) is unverified and cannot support any claims, ONLY refuting them.
        
         Definitions:
@@ -110,11 +122,11 @@ agent2 = create_agent(
                     "Relevance Score": 0-1,
                 }...]}
     """,
-    tools=[find_context, search_internet],
+    tools=tools_list,
 )
 
 agent3 = create_agent(
-    model= 'gpt-5.1',
+    model= VLLM,
     system_prompt = """
        You are a claim verification judgement agent meant to evaluate claims using structured evidence provided. You will perform different actions depending on whether the claim is of category "Verifiable" or "Unverifiable".
 
