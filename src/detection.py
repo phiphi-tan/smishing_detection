@@ -42,7 +42,7 @@ for row in data:
         response_plain_text = typewriter_print(response, response_plain_text)
     response_claim_agent = response
     output_claim = response_claim_agent[-1]['content']
-    # print(f"\nclaim output: {output_claim}")
+    print(f"\nclaim output: {output_claim}")
 
     message_filter_agent = [{'role': 'user', 'content': output_claim}]
     response = []

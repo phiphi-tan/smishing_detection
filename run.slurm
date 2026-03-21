@@ -12,7 +12,7 @@ mkdir -p logs
 source qwen/bin/activate
 
 # MODEL="Qwen/Qwen3-32B-AWQ"
-MODEL="Qwen/Qwen3-30B-A3B-FP8"
+# MODEL="Qwen/Qwen3-30B-A3B-FP8"
 # MODEL="Qwen/Qwen3-30B-A3B-Instruct-2507-FP8"
 
 # MODEL="Qwen/Qwen3-235B-A22B-GPTQ-Int4"
@@ -24,13 +24,20 @@ MODEL="Qwen/Qwen3-30B-A3B-FP8"
 
 # for Qwen3 Models
 vllm serve $MODEL \
-    --enable-auto-tool-choice \
-    --tool-call-parser hermes \
     --max-model-len 4096 \
     --max-num-seqs 8 \
     --chat-template ./data/qwen3_nonthinking.jinja \
     --port 8000 &
 VLLM_PID=$!
+
+# vllm serve $MODEL \
+#     --enable-auto-tool-choice \
+#     --tool-call-parser hermes \
+#     --max-model-len 4096 \
+#     --max-num-seqs 8 \
+#     --chat-template ./data/qwen3_nonthinking.jinja \
+#     --port 8000 &
+# VLLM_PID=$!
 
 # for Qwen3.5 models
 # vllm serve $MODEL \
