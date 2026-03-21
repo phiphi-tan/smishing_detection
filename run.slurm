@@ -2,33 +2,47 @@
 #SBATCH --job-name=speedup         
 #SBATCH --output=logs/output_%j.log         
 #SBATCH --error=logs/error_%j.log           
-#SBATCH --gres=gpu:h100-47:1
+#SBATCH --gres=gpu:h100-47:2
 #SBATCH --partition=gpu
 #SBATCH --time=00:20:00            
 #SBATCH --cpus-per-task=4     
 
 mkdir -p logs
 
-source .venv/bin/activate
+source qwen/bin/activate
 
-# ---------------------------
-# 2. Set environment variables for VLLM as OpenAI API
-# ---------------------------
-# export OPENAI_API_BASE="http://127.0.0.1:8000/v1"
+# MODEL="Qwen/Qwen3-32B-AWQ"
+MODEL="Qwen/Qwen3-30B-A3B-FP8"
+# MODEL="Qwen/Qwen3-30B-A3B-Instruct-2507-FP8"
 
+# MODEL="Qwen/Qwen3-235B-A22B-GPTQ-Int4"
+
+# MODEL="Qwen/Qwen3.5-35B-A3B-FP8"
 # ---------------------------
 # 3. Start VLLM HTTP API in the background
 # ---------------------------
-# vllm serve Qwen/Qwen3-8B --chat-template ./data/qwen3_nonthinking.jinja --enable-auto-tool-choice --tool-call-parser hermes --port 8000 &
-# VLLM_PID=$!
 
-# vllm serve Qwen/Qwen3-14B-FP8 --chat-template ./data/qwen3_nonthinking.jinja --enable-auto-tool-choice --tool-call-parser hermes --port 8000 &
-# VLLM_PID=$!
-
-vllm serve Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8 --enable-auto-tool-choice --tool-call-parser hermes --port 8000 &
+# for Qwen3 Models
+vllm serve $MODEL \
+    --enable-auto-tool-choice \
+    --tool-call-parser hermes \
+    --max-model-len 4096 \
+    --max-num-seqs 8 \
+    --chat-template ./data/qwen3_nonthinking.jinja \
+    --port 8000 &
 VLLM_PID=$!
 
-# vllm serve Qwen/Qwen3.5-9B --language-model-only --enable-auto-tool-choice --reasoning-parser qwen3 --tool-call-parser qwen3_coder --port 8000 &
+# for Qwen3.5 models
+# vllm serve $MODEL \
+#   --enable-expert-parallel \
+#   --language-model-only \
+#   --reasoning-parser qwen3 \
+#   --enable-prefix-caching \
+#   --max-model-len 4096 \
+#   --max-num-seqs 8 \
+#   --max-num-batched-tokens 4096 \
+#   --enforce-eager \
+#   --port 8000 &
 # VLLM_PID=$!
 
 echo "Started VLLM API with PID $VLLM_PID"
@@ -36,7 +50,7 @@ echo "Started VLLM API with PID $VLLM_PID"
 # ---------------------------
 # 4. Poll until vLLM API is ready
 # ---------------------------
-TIMEOUT=300       # max seconds to wait
+TIMEOUT=400       # max seconds to wait
 INTERVAL=30       # seconds between checks
 ELAPSED=0
 
@@ -58,7 +72,7 @@ echo "vLLM API is ready!"
 # ---------------------------
 # 5. Run your LangChain agents
 # ---------------------------
-python -u ./src/detection.py
+python -u ./src/detection.py --model "$MODEL"
 
 # ---------------------------
 # 6. Cleanup

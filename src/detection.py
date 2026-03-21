@@ -1,9 +1,21 @@
 import json
+import csv
+import argparse
+
 from langchain_community.document_loaders.csv_loader import CSVLoader
-from agents import agent1, agent2, agent3
+from agents import create_agents
+
+from qwen_agent.utils.output_beautify import typewriter_print
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model", type=str, default="Qwen/Qwen3-30B-A3B-FP8")
+args = parser.parse_args()
+
+claim_agent, filter_agent, evidence_agent, judge_agent = create_agents(args.model)
+
 
 output_file = "./data/test_output.ndjson"
-agent1_output = './data/agent1_test.ndjson'
+claim_agent_output = './data/claim_agent_test.ndjson'
 
 loader = CSVLoader(
     file_path="./data/D2.csv",
@@ -18,59 +30,72 @@ for row in data:
     if i < -1:
         i += 1
         continue
+
     phishing = row.metadata.get('raw_text')
     scam_id = row.metadata.get('scam_id')
-    print(f'Scam id: {scam_id}: {phishing}')
+    print(f'\nScam id: {scam_id}: {phishing}')
 
-    response1 = agent1.invoke({
-        'messages': [
-            {"role": "user", "content": phishing}
-        ]
-    })
+    message_1 = [{'role': 'user', 'content': phishing}]
+    response = []
+    response_plain_text = ''
+    for response in claim_agent.run(messages=message_1):
+        response_plain_text = typewriter_print(response, response_plain_text)
+    response_claim_agent = response
+    output_claim = response_claim_agent[-1]['content']
+    # print(f"\nclaim output: {output_claim}")
 
-    # print(f"response 1: {response1}")
-
-    agent1_response = response1['messages'][-1].content
-    print(f"agent 1: {agent1_response}")
+    message_filter_agent = [{'role': 'user', 'content': output_claim}]
+    response = []
+    response_plain_text = ''
+    for response in filter_agent.run(messages=message_filter_agent):
+        response_plain_text = typewriter_print(response, response_plain_text)
+    response_filter_agent = response
+    print(f'response filter agent: {response_filter_agent}')
+    output_filter = response_filter_agent[-1]['content']
+    # print(f'\nfilter output: {output_filter}')
 
     try:
-        claims = json.loads(agent1_response)
-        print(f'[AGENT1 RESPONSE]: \n {json.dumps(claims, indent=4)}')
+        claims = json.loads(output_filter)
+        # print(f'\n[response_filter RESPONSE]: \n {json.dumps(claims, indent=4)}')
 
-        with open(agent1_output, "a", encoding="utf-8") as f:
+        with open(claim_agent_output, "a", encoding="utf-8") as f:
             f.write(json.dumps(claims, ensure_ascii=False) + "\n")
 
-        # with open('../data/agent1.ndjson') as f:
+        # with open('../data/claim_agent.ndjson') as f:
         #     claims = ndjson.load(f)
         #     claims = claims[-1] # latest row only
 
         all_claims = []
 
         for claim in claims:
-            print(claim)
+            print(f"\nClaim: {claim}")
             
-            response2 = agent2.invoke({
-                'messages': [
-                    {"role": "user",
+            message_evidence_agent = [{"role": "user",
                      "content": f"""
                         Claim: {claim}
                         scam_id: {scam_id}
-                        """}
-                ]      
-            })
-            agent2_response = response2['messages'][-1].content 
-            # print(f'[AGENT2 RESPONSE]: \n {json.dumps(json.loads(agent2_response), indent=4)}')
+                        """}]
+            response = []
+            response_plain_text = ''
+            for response in evidence_agent.run(messages=message_evidence_agent):
+                response_plain_text = typewriter_print(response, response_plain_text)
+            response_evidence_agent = response
+            # print(response_evidence_agent)
+            output_evidence_agent = response_evidence_agent[-1]['content']
+            # print(f'\noutput_evidence_agent: {output_evidence_agent}')
+            
+            message_judgement_agent = [{'role': 'user', 'content': output_evidence_agent}]
+            response = []
+            response_plain_text = ''
+            for response in judge_agent.run(messages=message_judgement_agent):
+                response_plain_text = typewriter_print(response, response_plain_text)
+            response_3 = response
+            # print(response_3)
+            output_3 = response_3[-1]['content']
+            # print(f'\noutput_3: {output_3}')
 
-            response3 = agent3.invoke({
-                'messages': [
-                    {"role": "user", "content": agent2_response}
-                ]
-            })
-
-            agent3_response = response3['messages'][-1].content 
-            agent3_claim = json.loads(agent3_response)
-            print(f'[AGENT3 RESPONSE]: \n {json.dumps(agent3_claim, indent=4)}')
-
+            agent3_claim = json.loads(output_3)
+            # print(f'\n[AGENT3 RESPONSE]: \n {json.dumps(agent3_claim, indent=4)}')
             all_claims.append(agent3_claim)
 
         
@@ -78,10 +103,10 @@ for row in data:
             f.write(json.dumps(all_claims, ensure_ascii=False) + "\n")
 
     except json.JSONDecodeError as e:
-        print("Failed to parse JSON:", e)
+        print("\nFailed to parse JSON:", e)
     
 
     i += 1
-    if i >= 0:
+    if i >= 2:
         break
 

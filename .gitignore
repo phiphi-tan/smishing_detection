@@ -1,4 +1,6 @@
 .env
 logs/
 .venv/
+qwen/
+data/
 */__pycache__/

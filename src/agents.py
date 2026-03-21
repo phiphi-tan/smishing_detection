@@ -1,133 +1,112 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-import csv
-from langchain.agents import create_agent
-from langchain.tools import tool
-# from langchain_google_community.search import GoogleSearchResults, GoogleSearchAPIWrapper
-from langchain_community.agent_toolkits.load_tools import load_tools
-from langchain_community.tools import DuckDuckGoSearchResults
-from langchain_openai import ChatOpenAI
-from langchain_mcp_adapters.client import MultiServerMCPClient 
+from qwen_agent.agents import Assistant
+from tools import TOOLS_LIST
 
-VLLM = ChatOpenAI(
-    # model_name="Qwen/Qwen3-8B",
-    model_name="Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8",
-    # model_name="Qwen/Qwen3-14B-FP8",
-    # model_name="Qwen/Qwen3.5-9B",
-    base_url="http://127.0.0.1:8000/v1",
-    api_key="EMPTY",
-)
 
-agent1 = create_agent(
-    model= VLLM,
-    system_prompt = """
-        You are an agent meant to extract non-sentimental claims from given texts and classify their verifiabilities.
-
-        Extract claims from the message. 
-        - Explicit claims: propositions that can be measured true or false (ignore greetings, wishes, politeness, emotions, or aspirations)
-        - Implicit claims: sender identity / institutional affiliation
-
-        Definitions:
-        1. A claim is defined as an non-sentimental, assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, it is a tuple of information slots: <Subject, Predicate, Condition>
-        2. Verifiable: A claim is verifiable if a neutral third party could refute it using contextual understanding or using publicly available sources (such as internet searches) without any other private information / actions
+PROMPT_CLAIM_AGENT =  """
+        You are an agent meant to extract non-sentimental claims from given texts and classify their verifiabilities. A claim is defined as an non-sentimental, assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, it is a tuple of information slots: <Subject, Predicate, Condition>
 
         Instructions:
         1. Extract claims made by the sender within the message (explicit and implicit), providing both the raw claim (plaintext) as well as the parsed claim ([Subject, Predicate, Condition] tuple).
         2. Exclude all claims that express sentiment / speculation, do not assert an objective, externally verifiable fact, and cannot be true or false in a measurable way
-        3. Determine the verifiability category for each remaining claim.
 
         Guidelines:
-        - Return JSON only
+        - Return ONLY valid JSON. Do NOT include markdown, backticks, or explanations.
+        - Explicit claims: propositions that can be measured true or false (ignore greetings, wishes, politeness, emotions, or aspirations)
+        - Implicit claims: sender identity / institutional affiliation
         - Extract atomic claims only (split compound statements into multiple claims)
         - Do not paraphrase unless necessary for separation 
 
-        Output format (JSON only):
+        Output format (JSON list only):
             [{"raw_claim": "...",
-                "parsed_claim": [{Subject}, {Predicate}, {Condition}],  
-                "Category": "Verifiable / Unverifiable"}, ...
+                "parsed_claim": [{Subject}, {Predicate}, {Condition}]}, ...
             ]
     """
-)
-
-# google_search_tool = GoogleSearchResults(
-#     api_wrapper=GoogleSearchAPIWrapper(google_api_key=os.environ.get("GOOGLE_API_KEY"), google_cse_id=os.environ.get("GOOGLE_CSE_ID")),
-#     num=5
-# )
-
-# @tool('google_search', description='Searches the internet and returns the top 5 JSON results', return_direct=False)
-# def google_search(query:str) -> str:
-#     print(f"[TOOL CALLED] Search query: {query}")
-#     json_string = google_search_tool.run(query)
-#     print(f"[TOOL RETURNED] {json_string}")
-#     return json_string
-
-search = DuckDuckGoSearchResults(output_format="json", max_results=4)
-@tool('search_internet', description="Searches the internet. Input should be a natural search query.", return_direct=False)
-def search_internet(query: str) -> str:
-    query = query.replace('"', "") # removes quotes
-    print(f"[TOOL CALLED] Search query: {query}")
-    search_results = search.invoke(query)
-    print(f"[TOOL RETURNED] {search_results}")
-    return search_results
-
-# mimics a database
-context_data = {}
-with open("./data/D2.csv", encoding="utf-8", errors="replace") as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        context_id = row["scam_id"]
-        context_data[context_id] = row
-
-@tool('find_context', description="Given a scam_id, returns the original message text (raw text) as context. This context is unverified and must be used solely to identify inconsistencies or refute claims, never to support them.", return_direct=False)
-def find_context(scam_id: str) -> str:
-    print(f"[TOOL CALLED] find_context: {scam_id}")
-    row = context_data.get(scam_id)
-    if row:
-        raw_text = row.get("raw_text", "")
-    else:
-        raw_text = "No context found for this scam_id."
-    print(f"[TOOL RETURNED] {raw_text}")
-    return raw_text
-
-tools_list = [search_internet, find_context]
-
-agent2 = create_agent(
-    model= VLLM,
-    system_prompt = """
-       You are a scam-detection fact-checking agent meant to refute independent claims. Your goal is to investigate claims and search for refuting evidence using all tools available to you.
-       Assume claims are false and attempt to disprove it using internal / external evidence; ONLY if EXTERNAL evidence supports a claim should it be validated. Contextual text (internal evidence) is unverified and cannot support any claims, ONLY refuting them.
-       
-        Definitions:
-        1. A claim is defined as an non-sentimental, assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, it is a tuple of information slots: <Subject, Predicate, Condition>
-        2. Verifiable: A claim is verifiable if a neutral third party could, in principle, check it using publicly available sources (such as the internet) or from contextual understand (from the original message)
-        4. Internal evidence: Logical inconsistencies between a claim and the context (e.g. claiming "High Salary" with a context of "Minimal Experience Required")
-        5. External evidence: Evidence obtained through external, public sources (such as internet searches)
+PROMPT_FILTER_AGENT = """
+        You are an agent that filters extracted claims and retains only HIGH-VALUE phishing-relevant claims. You will receive a JSON list of claims produced by a previous claim extraction agent. Each claim contains: raw_claim, and parsed_claim [Subject, Predicate, Condition]
 
         Instructions:
-        1. Highlight logical inconsistencies between a claim and the context. Context MUST never be used to support a claim.
-        2. (For verifiable claims only) If internal evidence does not refute the claim, you should also fetch relevant external evidence related to the claim using the tools given to you.
-        3. Provide a brief explanation of each evidence collected, and assign a reliability and relevance score from 0 to 1.
-        4. Stop collecting evidence if there is sufficient / strong independent evidence that supports / refutes the claim.
-        5. Return JSON only, appending only "Evidence Collected" onto the original claim JSON (do not change the original claim or add a conclusion).
+        1. Examine each claim and determine whether it belongs to one of the HIGH-VALUE categories above.
+        2. Keep only claims that clearly fit one of these categories.
+        3. Assign the most appropriate category label.
+        4. Ignore claims that do not match any high-value category.
+
+        High-Value Claim Categories:
+        1. Identity: sender claims to represent a known organization or authority (e.g., "We are Amazon", "This is PayPal support")
+        2. Delivery: claims about packages, shipments, or delivery issues (e.g., "Your package is delayed")
+        3. Financial: claims about money, prizes, winnings, refunds, or payments (e.g., "You won $5000")
+        4. Account: claims about account status such as suspension, locking, or restriction
+        5. Urgency: claims imposing time pressure or deadlines (e.g., "Act now", "Expires tonight")
+        6. Action: instructions requesting the user to perform an action (e.g., "Click this link", "Call immediately")
+        7. Verification: requests to verify identity or confirm information
+        8. Security: claims about suspicious activity, unauthorized access, or security alerts
+        9. Reward: offers of bonuses, cashback, loyalty rewards, or gifts
+        10. Legal: claims involving legal threats, fines, taxes, or court actions
+        11. Social: claims involving friends, family, or acquaintances needing help
+        12. Credentials: requests to update passwords, PINs, login information, or credentials
+
+        Guidelines:
+        - Return ONLY valid JSON. Do NOT include markdown, backticks, or explanations.
+        - Preserve the original raw_claim and parsed_claim exactly as given.
+        - If multiple categories could apply, choose the most specific one.
+        - Be conservative: only keep claims strongly aligned with phishing signals.
+        - Do NOT assign a High_Value_Type to claims that are purely identifiers, reference numbers, transaction IDs, or other metadata that cannot be independently verified or do not imply a user risk.
+        - Only keep claims that assert a factual event, financial impact, security alert, or action request.
 
         Output format (JSON only):
-            {"raw_claim": "...",
-                "parsed_claim": [{Subject}, {Predicate}, {Condition}],
-                "Category": "Verifiable / Unverifiable",
-                "Evidence Collected":[{
-                    "Source": "Internal Evidence" / {url link of external evidence},
-                    "Evidence": {short explanation}, _
-                    "Reliability Score": 0-1,
-                    "Relevance Score": 0-1,
-                }...]}
-    """,
-    tools=tools_list,
-)
+        [
+            {
+                "raw_claim": "...",
+                "parsed_claim": [Subject, Predicate, Condition],
+                "High_Value_Type": "Identity / Delivery / Financial / Account / Urgency / Action / Verification / Security / Reward / Legal / Social / Credentials"
+            }, ...
+        ]
+    """
 
-agent3 = create_agent(
-    model= VLLM,
-    system_prompt = """
+
+PROMPT_EVIDENCE_AGENT = """
+You are an agent meant to verify claims by identifying the evidence required and retrieving that evidence using available tools. You will receive a single JSON-parsed claim extracted from a previous agent.
+A claim is defined as a tuple: <Subject, Predicate, Condition>.
+
+Instructions:
+1. Analyze the claim and determine what type of evidence is required to verify it.
+2. ALWAYS start by using the internal evidence tools to refute the claim:
+    a) original_message - Input: scam_id. Use this to detect inconsistencies within the message, but do NOT use it as supporting evidence.
+    b) all_claims - Compare this claim against all other claims in the message to detect contradictions.
+3. Afterwards, ALWAYS use the internet_search tool to gather external, factual evidence.
+4. Use the evidence you collect to score relevance and reliability (0 to 1).
+5. Return the collected evidence along with the verification status.
+
+Guidelines:
+- Do not fabricate evidence or assume facts without tool outputs.
+- If tools cannot find sufficient evidence, mark the claim as "Unverifiable".
+- Keep evidence concise and clearly attributable to sources.
+- Return ONLY valid JSON. Do NOT include markdown, backticks, or explanations.
+
+Output format (JSON only):
+{
+    "raw_claim": "...",
+    "parsed_claim": [{Subject}, {Predicate}, {Condition}],
+    "High_Value_Type": "...",
+
+    "evidence_required": "(briefly list what evidence is needed to verify this claim)",
+
+    "evidence_collected": [
+        {
+            "source": "Contextual Evidence" / "Cross-claim Evidence" / url (if internet_search was called),
+            "evidence": "...",
+            "reliability": 0 - 1,
+            "relevance": 0 - 1,
+        }, ...
+    ],
+
+    "Verification": "Verifiable / Unverifiable"
+}
+"""
+
+PROMPT_JUDGE_AGENT = """
        You are a claim verification judgement agent meant to evaluate claims using structured evidence provided. You will perform different actions depending on whether the claim is of category "Verifiable" or "Unverifiable".
 
         Definitions:
@@ -143,19 +122,58 @@ agent3 = create_agent(
                 - True if external evidence strongly refutes the claim
                 - Uncertain if evidence is conflicting or contains low reliability and/or relevance scores
         2. Return JSON only, appending "Extra Evidence Needed" and "Verdict" onto the original JSON (do not change the original input)
+        
+        Return ONLY valid JSON. Do NOT include markdown, backticks, or explanations.
 
         Output format (JSON only):
-            {"raw_claim": "...",
-                "parsed_claim": [{Subject}, {Predicate}, {Condition}],
-                "Category": "Verifiable / Unverifiable"},
-                "Evidence Collected":[{
-                    "Source": "Internal Evidence" / {link of external evidence},
-                    "Evidence": {explanation}, _
-                    "Reliability Score": 0-1,
-                    "Relevance Score": 0-1,
-                }...],
-                "Extra Evidence Needed": {extremely short explanation} ("null" if unnecessary),
-                "Verdict": "False" / "True" / "Unsure" / "Extra Evidence Needed"}
-    """,
-)
+        {
+            "raw_claim": "...",
+            "parsed_claim": [{Subject}, {Predicate}, {Condition}],
+            "High_Value_Type": "...",
 
+            "evidence_required": "{...}",
+
+            "evidence_collected": [
+                {
+                    "source": "Contextual Evidence" / "Cross-claim Evidence" / url (from external searches),
+                    "evidence": "...",
+                    "reliability": 0 - 1,
+                    "relevance": 0 - 1,
+                }, ...
+            ],
+
+            "Verification": "Verifiable / Unverifiable"
+            "Extra Evidence Needed": {extremely short explanation} ("null" if unnecessary),
+            "Verdict": "False" / "True" / "Unsure" / "Extra Evidence Needed"
+        }
+    """
+
+def create_agents(model_name):
+    llm_cfg = {
+        'model': model_name,
+        'model_server': 'http://127.0.0.1:8000/v1',
+        'api_key': 'EMPTY',
+    }
+
+    claim_agent = Assistant(
+        llm=llm_cfg,
+        system_message=PROMPT_CLAIM_AGENT,
+    )
+
+    filter_agent = Assistant(
+        llm=llm_cfg,
+        system_message=PROMPT_FILTER_AGENT,
+    )
+
+    evidence_agent = Assistant(
+        llm=llm_cfg,
+        system_message=PROMPT_EVIDENCE_AGENT,
+        function_list=TOOLS_LIST
+    )
+
+    judge_agent = Assistant(
+        llm=llm_cfg,
+        system_message=PROMPT_JUDGE_AGENT,
+    )
+
+    return claim_agent, filter_agent, evidence_agent, judge_agent
