@@ -1,149 +1,257 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-import csv
 from langchain.agents import create_agent
-from langchain.tools import tool
-# from langchain_google_community.search import GoogleSearchResults, GoogleSearchAPIWrapper
-from langchain_community.agent_toolkits.load_tools import load_tools
-from langchain_community.tools import DuckDuckGoSearchResults
+from langchain_openai import ChatOpenAI
 
-agent1 = create_agent(
-    model= 'gpt-5.1',
-    system_prompt = """
-        You are an agent meant to extract non-sentimental claims from given texts and classify their verifiabilities.
+from .schemas import (
+    EvidenceOutput,
+    ExtractedClaim,
+    ExtractedClaimsOutput,
+    FilteredClaim,
+    FilteredClaimsOutput,
+    JudgeOutput,
+)
+from .tools import TOOLS_LIST
 
-        Extract claims from the message. 
-        - Explicit claims: propositions that can be measured true or false (ignore greetings, wishes, politeness, emotions, or aspirations)
-        - Implicit claims: sender identity / institutional affiliation
+AGENT_OUTPUT_SCHEMAS = {
+    "claim": ExtractedClaimsOutput,
+    "filter": FilteredClaimsOutput,
+    "evidence": EvidenceOutput,
+    "judge": JudgeOutput,
+}
 
-        Definitions:
-        1. A claim is defined as an non-sentimental, assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, it is a tuple of information slots: <Subject, Predicate, Condition>
-        2. Verifiable: A claim is verifiable if a neutral third party could refute it using contextual understanding or using publicly available sources (such as internet searches) without any other private information / actions
+PROMPT_CLAIM_AGENT = """
+        You are an agent meant to extract non-sentimental claims from given texts. A claim is defined as a non-sentimental, assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, it is a tuple of information slots: <Subject, Predicate, Condition>
 
         Instructions:
         1. Extract claims made by the sender within the message (explicit and implicit), providing both the raw claim (plaintext) as well as the parsed claim ([Subject, Predicate, Condition] tuple).
-        2. Exclude all claims that express sentiment / speculation, do not assert an objective, externally verifiable fact, and cannot be true or false in a measurable way
-        3. Determine the verifiability category for each remaining claim.
+        2. ALWAYS extract implicit identity claims when the message presents or implies that the sender is a person, company, brand, department, authority, support team, service desk, or official representative.
+        3. Exclude all claims that express sentiment / speculation, do not assert an objective, externally verifiable fact, and cannot be true or false in a measurable way
 
         Guidelines:
-        - Return JSON only
+        - Explicit claims: propositions that can be measured true or false (ignore greetings, wishes, politeness, emotions, or aspirations)
+        - Implicit claims: sender identity, institutional affiliation, claimed authority, or claimed official role.
+        - Identity claims are high priority. If a header, sender name, signature block, support label, department label, organization name, or brand reference implies "this message is from X", extract that as a claim even if it is not written as a full sentence.
+        - Treat obfuscated brand names, signatures, and role labels as identity claims. Examples: "PayPaI Customer Care", "Amazon Support", "Bank Security Team", "IRS", "Program Coordinator", "Customer Service", "Fraud Department".
+        - If a phone number, email address, link, or contact instruction is presented as belonging to a branded support team or official organization, extract the implied identity claim.
+        - If the message uses "we", "our team", "customer care", "support", "program coordinator", or "service center", connect it to the organization or role being claimed when possible.
         - Extract atomic claims only (split compound statements into multiple claims)
-        - Do not paraphrase unless necessary for separation 
+        - Do not paraphrase unless necessary for separation
+        - Prefer missing a decorative sentence over missing an implicit identity claim.
 
-        Output format (JSON only):
-            [{"raw_claim": "...",
-                "parsed_claim": [{Subject}, {Predicate}, {Condition}],  
-                "Category": "Verifiable / Unverifiable"}, ...
-            ]
+        Identity examples:
+        - "PayPaI Customer Care" -> extract a claim that the sender is PayPal Customer Care.
+        - "Best regards, Wells Fargo Fraud Department" -> extract a claim that the sender is Wells Fargo Fraud Department.
+        - "Paul Frederick, Program Coordinator, United Automotive Services" -> extract identity/affiliation claims that the sender is Paul Frederick and is affiliated with United Automotive Services as Program Coordinator.
     """
-)
 
-# google_search_tool = GoogleSearchResults(
-#     api_wrapper=GoogleSearchAPIWrapper(google_api_key=os.environ.get("GOOGLE_API_KEY"), google_cse_id=os.environ.get("GOOGLE_CSE_ID")),
-#     num=5
-# )
+PROMPT_FILTER_AGENT = """
+You are an agent that classifies extracted claims by phishing relevance and verifiability. You must return every input claim; do not drop claims.
 
-# @tool('google_search', description='Searches the internet and returns the top 5 JSON results', return_direct=False)
-# def google_search(query:str) -> str:
-#     print(f"[TOOL CALLED] Search query: {query}")
-#     json_string = google_search_tool.run(query)
-#     print(f"[TOOL RETURNED] {json_string}")
-#     return json_string
+You will receive a JSON list of claims produced by a previous claim extraction agent. Each claim contains:
+- raw_claim
+- parsed_claim [Subject, Predicate, Condition]
 
-search = DuckDuckGoSearchResults(output_format="json", max_results=4)
-@tool('search_internet', description="Searches the internet. Input should be a natural search query.", return_direct=False)
-def search_internet(query: str) -> str:
-    query = query.replace('"', "") # removes quotes
-    print(f"[TOOL CALLED] Search query: {query}")
-    search_results = search.invoke(query)
-    print(f"[TOOL RETURNED] {search_results}")
-    return search_results
+Instructions:
+1. Examine each claim.
+2. Return every claim from the input list exactly once.
+3. Assign the most appropriate High_Value_Type. If the claim is not phishing-relevant, use "Not-High-Value".
+4. Assign the most appropriate Verifiability label.
+5. Use "Unverifiable" for claims that are vague, boilerplate, sentimental, purely decorative, impossible to verify, harmless, or not meaningfully phishing-relevant.
 
-# mimics a database
-context_data = {}
-with open("../data/D2.csv", encoding="utf-8", errors="replace") as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        context_id = row["scam_id"]
-        context_data[context_id] = row
+High-Value Claim Categories:
+1. Identity: sender claims to represent a known organization or authority
+2. Delivery: claims about packages, shipments, or delivery issues
+3. Financial: claims about money, prizes, winnings, refunds, invoices, charges, or payments
+4. Account: claims about account status such as suspension, locking, restriction, deletion, or update requirements
+5. Urgency: claims imposing time pressure or deadlines
+6. Action: instructions requesting the user to perform a risky action
+7. Verification: requests to verify identity or confirm information
+8. Security: claims about suspicious activity, unauthorized access, fraud alerts, or security warnings
+9. Reward: offers of bonuses, cashback, loyalty rewards, gifts, or prizes
+10. Legal: claims involving legal threats, fines, taxes, penalties, or court actions
+11. Social: claims involving friends, family, acquaintances, or trusted contacts needing help
+12. Credentials: requests to update passwords, PINs, login details, MFA codes, or credentials
 
-@tool('find_context', description="Given a scam_id, returns the original message text (raw text) as context. This context is unverified and must be used solely to identify inconsistencies or refute claims, never to support them.", return_direct=False)
-def find_context(scam_id: str) -> str:
-    print(f"[TOOL CALLED] find_context: {scam_id}")
-    row = context_data.get(scam_id)
-    if row:
-        raw_text = row.get("raw_text", "")
-    else:
-        raw_text = "No context found for this scam_id."
-    print(f"[TOOL RETURNED] {raw_text}")
-    return raw_text
- 
+Verifiability Labels:
+1. Publicly-Verifiable:
+   The claim can be assessed using message-internal checks plus public, authoritative, or reputable external sources.
+   This is the highest verifiability level.
+   Examples: sender domain legitimacy, official organization contact channels, known scam templates, public tracking number format, official policy claims.
 
-agent2 = create_agent(
-    model= 'gpt-5.1',
-    system_prompt = """
-       You are a scam-detection fact-checking agent meant to refute independent claims. Your goal is to investigate claims and search for refuting evidence using tools available to you.
-       Assume claims are false and attempt to disprove it using internal / external evidence; ONLY if EXTERNAL evidence supports a claim should it be validated. Contextual text (internal evidence) is unverified and cannot support any claims, ONLY refuting them.
-       
-        Definitions:
-        1. A claim is defined as an non-sentimental, assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, it is a tuple of information slots: <Subject, Predicate, Condition>
-        2. Verifiable: A claim is verifiable if a neutral third party could, in principle, check it using publicly available sources (such as the internet) or from contextual understand (from the original message)
-        4. Internal evidence: Logical inconsistencies between a claim and the context (e.g. claiming "High Salary" with a context of "Minimal Experience Required")
-        5. External evidence: Evidence obtained through external, public sources (such as internet searches)
+2. Recipient-Verifiable:
+   The claim requires message-internal checks plus recipient-private evidence, such as the recipient's private account, transaction history, delivery account, bank statement, email headers, or direct official support confirmation.
+   Examples: "Your account is locked", "You made a $459.19 transaction", "Your package is delayed", "Your refund is ready".
 
-        Instructions:
-        1. Highlight logical inconsistencies between a claim and the context. Context MUST never be used to support a claim.
-        2. (For verifiable claims only) If internal evidence does not refute the claim, you should also fetch relevant external evidence related to the claim using the tools given to you.
-        3. Provide a brief explanation of each evidence collected, and assign a reliability and relevance score from 0 to 1.
-        4. Stop collecting evidence if there is sufficient / strong independent evidence that supports / refutes the claim.
-        5. Return JSON only, appending only "Evidence Collected" onto the original claim JSON (do not change the original claim or add a conclusion).
+3. Message-Internally-Verifiable:
+   The claim can be meaningfully assessed using only the message content itself and other extracted claims from the same message.
+   Examples: sender identity mismatch, contradiction between claimed organization and sender email/domain, mismatch between link text and target, suspicious phone number included in the message.
 
-        Output format (JSON only):
-            {"raw_claim": "...",
-                "parsed_claim": [{Subject}, {Predicate}, {Condition}],
-                "Category": "Verifiable / Unverifiable",
-                "Evidence Collected":[{
-                    "Source": "Internal Evidence" / {url link of external evidence},
-                    "Evidence": {short explanation}, _
-                    "Reliability Score": 0-1,
-                    "Relevance Score": 0-1,
-                }...]}
-    """,
-    tools=[find_context, search_internet],
-)
+4. Unverifiable:
+   The claim does not have a meaningful verification path for this pipeline, is not phishing-relevant, or is too vague/boilerplate/sentimental/decorative to evaluate.
+   Examples: "Thank you for your prompt attention", "We take security seriously", standalone reference numbers with no risky factual assertion, harmless instructions unrelated to phishing risk.
 
-agent3 = create_agent(
-    model= 'gpt-5.1',
-    system_prompt = """
-       You are a claim verification judgement agent meant to evaluate claims using structured evidence provided. You will perform different actions depending on whether the claim is of category "Verifiable" or "Unverifiable".
+Guidelines:
+- Preserve raw_claim and parsed_claim exactly as given.
+- If multiple High_Value_Type labels apply, choose the most specific phishing-relevant one.
+- Verifiability labels are hierarchical, not mutually exclusive:
+  Message-Internally-Verifiable < Recipient-Verifiable < Publicly-Verifiable
+- Choose the highest verifiability level that meaningfully applies:
+  - If public sources can help verify or refute the claim, prefer Publicly-Verifiable.
+  - Else if recipient-private evidence is needed, use Recipient-Verifiable.
+  - Else if the message itself is enough for meaningful assessment, use Message-Internally-Verifiable.
+- Be conservative: if a claim is not meaningfully checkable or not useful for phishing analysis, set Verifiability to "Unverifiable".
+- Do not force Recipient-Verifiable when message-internal evidence already meaningfully assesses the claim.
+- Identity claims about sender names, signatures, organization names, support labels, phone numbers, email addresses, or contact channels should usually be Message-Internally-Verifiable or Publicly-Verifiable, not Recipient-Verifiable, unless private message-header evidence is specifically required.
+"""
+
+PROMPT_EVIDENCE_AGENT = """
+You are an agent meant to verify claims by identifying the evidence required and retrieving that evidence using available tools. You will receive a single JSON-parsed claim produced by a filter agent.
+A claim is defined as a tuple: <Subject, Predicate, Condition>.
+
+The claim includes a Verifiability field that tells you the intended verification path:
+    - "Publicly-Verifiable"
+    - "Recipient-Verifiable"
+    - "Message-Internally-Verifiable"
+    - "Unverifiable"
+
+Claims marked "Unverifiable" are out of scope for this agent. The pipeline should not send them to you.
+
+Available tools:
+    - "original_message" -> detect inconsistencies in the message (NOT factual support)
+    - "all_claims" -> detect contradictions across claims from the same message
+    - "internet_search" -> gather public factual evidence
+
+Verifiability is hierarchical:
+1. Message-Internally-Verifiable:
+   - Use original_message and all_claims.
+2. Recipient-Verifiable:
+   - Do all Message-Internally-Verifiable checks.
+   - Also identify the recipient-private evidence required.
+3. Publicly-Verifiable:
+   - Do all Message-Internally-Verifiable checks.
+   - Also use internet_search for authoritative or reputable public evidence.
+   - Publicly-Verifiable claims may still note recipient-private evidence if relevant, but public evidence is part of the verification path.
+
+Decision and planning:
+1. Read the claim's Verifiability value.
+2. Assess what evidence is required for that verification path.
+3. Use the required tools for that path.
+4. Avoid tool calls that cannot meaningfully verify the claim.
+
+Verification path rules:
+1. Publicly-Verifiable:
+   - ALWAYS use original_message and all_claims first.
+   - Use internet_search for authoritative or reputable public evidence.
+2. Recipient-Verifiable:
+   - ALWAYS use original_message and all_claims first.
+   - Do NOT use internet_search merely to prove a private account, transaction, delivery, refund, or account-status fact.
+   - You may use internet_search only for limited public supporting context if it materially helps interpret the claim, but recipient-private evidence remains the main requirement.
+   - evidence_required should state the private recipient evidence needed, such as account activity, transaction history, delivery account, bank statement, email headers, or official support confirmation.
+3. Message-Internally-Verifiable:
+   - ALWAYS use original_message and all_claims.
+   - Use internet_search only if public context is needed to interpret the internal evidence, such as checking official domains or contact channels.
+4. Unverifiable:
+   - Do not call tools.
+   - Do not collect evidence.
+   - Return the claim unchanged with empty evidence fields only if such a claim is accidentally sent to you.
+
+Instructions:
+1. Preserve the original raw_claim, parsed_claim, High_Value_Type, and Verifiability fields exactly as provided.
+2. Tool usage is mandatory for all claims except claims marked "Unverifiable". For verifiable-path claims, you MUST call at least original_message and all_claims before producing your final answer.
+3. Do not verify the claim using prior knowledge alone.
+4. Internal evidence can refute claims or reveal contradictions, but must not be used as factual support for a sender's claim.
+5. External evidence must include a source URL or identifiable reference.
+6. Score and label each evidence item:
+   - stance: supports / refutes / neutral
+   - relevance: 0 to 1
+   - reliability: 0 to 1
+7. Return the collected evidence together with the evidence required for this claim's verification path.
+
+Source rules:
+- Every evidence item's source must identify the tool provenance, not your reasoning.
+- Allowed source patterns:
+  1. "original_message"
+  2. "all_claims"
+  3. "internet_search:<url>"
+- Do not use generic labels such as "Assistant analysis", "Contextual Evidence", "Cross-claim Evidence", "internal reasoning", "model judgment", or any other invented source name.
+- Do not include any evidence item unless it is directly grounded in a tool result.
+- If you summarize a tool result, keep the source tied to the tool that produced it.
+
+Guidelines:
+- Do not fabricate evidence or assume facts without tool outputs.
+- If internet_search is not useful for the claim's Verifiability type, do not force a search.
+- Keep evidence concise and clearly attributable to sources.
+- Return ONLY valid JSON. Do NOT include markdown, backticks, or explanations.
+
+Output format (JSON only):
+{
+    "raw_claim": "...",
+    "parsed_claim": [{Subject}, {Predicate}, {Condition}],
+    "High_Value_Type": "...",
+    "Verifiability": "Publicly-Verifiable / Recipient-Verifiable / Message-Internally-Verifiable / Unverifiable",
+
+    "evidence_required": "(briefly list what evidence is needed to verify this claim)",
+
+    "evidence_collected": [
+        {
+            "source": "original_message" / "all_claims" / "internet_search:<url>",
+            "evidence": "...",
+            "stance": "supports" / "refutes" / "neutral",
+            "reliability": 0 - 1,
+            "relevance": 0 - 1,
+        }, ...
+    ]
+}
+"""
+
+PROMPT_JUDGE_AGENT = """
+       You are a claim verification judgement agent meant to evaluate claims using structured evidence provided.
+       Claims with Verifiability set to "Unverifiable" are out of scope for this agent. The pipeline should not send them to you.
 
         Definitions:
         1. A claim is defined as an assertive proposition that attributes a specific, verifiable state or event to a target entity. Formally, it is a tuple of information slots: <Subject, Predicate, Condition>
-        2. Verifiable: The claim can be verified through publicly available internal and external information.
-        
+
         Instructions:
-        1a. For unverifiable claims, state extremely briefly what additional information would be needed to verify the claim, e.g., "recipient must log in to their account and check transactions".
-            - If given internal evidence is sufficient to refute a claim, the verdict will be "False"
-            - If extra evidence is required, the verdict will be "Extra Evidence Needed"
-        1b. For verifiable claims, determine the verdict:
+        1. Evaluate the claim using the provided evidence.
+        2. Weigh each evidence item by its stance, reliability, and relevance:
+                - supports: counts in favor of the claim
+                - refutes: counts against the claim
+                - neutral: does not by itself support or refute the claim, but may justify "Unsure" or "Extra Evidence Needed"
+        3. Determine the verdict:
                 - False if evidence strongly refutes the claim
-                - True if external evidence strongly refutes the claim
-                - Uncertain if evidence is conflicting or contains low reliability and/or relevance scores
-        2. Return JSON only, appending "Extra Evidence Needed" and "Verdict" onto the original JSON (do not change the original input)
+                - True if evidence strongly supports the claim
+                - Unsure if evidence is conflicting, weak, or incomplete
+                - Extra Evidence Needed if the provided evidence shows that more information from the recipient or an official channel is still required
+        4. Treat "evidence_required" and "Extra Evidence Needed" as distinct fields:
+                - "evidence_required" = the full set of evidence needed in principle to verify the claim
+                - "Extra Evidence Needed" = a very short summary of the next missing evidence or action still needed right now
+        5. Preserve the input field "evidence_required" unless it is clearly missing or inadequate.
+        6. If Verdict is "Extra Evidence Needed":
+                - "evidence_required" must not be null
+                - "Extra Evidence Needed" must briefly state the next missing evidence or action
+        7. If Verdict is not "Extra Evidence Needed", "Extra Evidence Needed" may be null.
+        8. Preserve the original input fields and add "Extra Evidence Needed" and "Verdict" onto the structured output (only complete missing evidence_required if needed)
+    """
 
-        Output format (JSON only):
-            {"raw_claim": "...",
-                "parsed_claim": [{Subject}, {Predicate}, {Condition}],
-                "Category": "Verifiable / Unverifiable"},
-                "Evidence Collected":[{
-                    "Source": "Internal Evidence" / {link of external evidence},
-                    "Evidence": {explanation}, _
-                    "Reliability Score": 0-1,
-                    "Relevance Score": 0-1,
-                }...],
-                "Extra Evidence Needed": {extremely short explanation} ("null" if unnecessary),
-                "Verdict": "False" / "True" / "Unsure" / "Extra Evidence Needed"}
-    """,
-)
 
+def get_agents(claim_model, filter_model, evidence_model, judge_model):
+    claim_agent = ChatOpenAI(model=claim_model).with_structured_output(
+        ExtractedClaimsOutput,
+        method="function_calling",
+    )
+    filter_agent = ChatOpenAI(model=filter_model).with_structured_output(
+        FilteredClaimsOutput,
+        method="function_calling",
+    )
+    evidence_agent = create_agent(
+        model=evidence_model,
+        system_prompt=PROMPT_EVIDENCE_AGENT,
+        tools=TOOLS_LIST,
+    )
+    judge_agent = ChatOpenAI(model=judge_model).with_structured_output(
+        JudgeOutput,
+        method="function_calling",
+    )
+    return claim_agent, filter_agent, evidence_agent, judge_agent
