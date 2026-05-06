@@ -1,54 +1,74 @@
 # Smishing Detection via Fact-Checking Perspective
 
-This repo uses an agentic approach to verify claims made in smishing (SMS phishing)
+This repo uses an agentic approach to verify claims made in smishing (SMS phishing).
 
 ## Setup
 
-1. Initialise virtual environment
+1. Install dependencies from `uv.lock` to ensure consistent versions:
 
-```
-uv init myproj
-```
-
-2. Install dependencies from `uv.lock` to ensure consistent versions:
-
-```
+```powershell
 uv sync
 ```
 
+Do not run `uv init` for this cloned project; that command is for creating a new project.
+
 ## Running
 
-1. Move into src folder (output paths are hardcoded)
+Run the program inside the virtual environment:
 
-```
-cd src/
+```powershell
+uv run python -m src.detection
 ```
 
-2. run the program inside the virtual environment
+To process a subset of rows:
 
+```powershell
+uv run python -m src.detection --start-index 0 --limit 1
 ```
-uv run python detection.py
+
+To summarize existing outputs:
+
+```powershell
+uv run python src/data_processing.py
+```
+
+Each detection run writes to a new timestamped directory under `data/output/`:
+
+```text
+data/output/YYYYMMDD_HHMMSS_microseconds/
++-- claims.ndjson
++-- output.ndjson
+```
+
+To summarize a specific run:
+
+```powershell
+uv run python src/data_processing.py --run-dir data/output/YYYYMMDD_HHMMSS_microseconds
 ```
 
 ## Project Structure
 
-```bash
+```text
 smishing_detection/
-├── src/
-│   ├── detection.py # the main detection code
-│   └── agents.py # definitions of the agents and related tools
-│   └── data_processing.py # obtain statistics from the results
-├── data/
-│   └── D2.csv # database of 50 phishing messages
-│   └── agent1.ndjson # output from claim extraction agent
-│   └── smishing_output.ndjson # final output
++-- src/
+|   +-- tools.py
+|   +-- detection.py
+|   +-- agents.py
+|   +-- data_processing.py
+|   `-- schemas.py
++-- data/
+|   +-- D2.csv
+|   `-- output/<timestamp>/claims.ndjson
+|   `-- output/<timestamp>/output.ndjson
++-- pyproject.toml
+`-- uv.lock
 ```
 
 ## Results
 
-The following results were obtained from running `src/data_processing.py` on the obtained `data/smishing_output.ndjson`
+The following results were obtained from running `src/data_processing.py` on the obtained `data/smishing_output.ndjson`.
 
-```
+```text
 === Message-level Stats ===
 Total Messages: 50
 Average claims per message: 8
